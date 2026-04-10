@@ -1,0 +1,5 @@
+python-telegram-bot==20.7
+aiohttp==3.9.1
+python-dotenv==1.0.0
+psycopg2-binary==2.9.9  # PostgreSQL (Render ka free DB)
+redis==5.0.1            # Caching (optional)
