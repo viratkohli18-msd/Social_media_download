@@ -56,7 +56,7 @@ async def download_video(url: str):
     try:
         async with aiohttp.ClientSession() as session:
             payload = {"url": url, "vQuality": "1080", "isAudioOnly": False}
-            async with session.post("https://api.cobalt.tools/api/json", json=payload, timeout=30) as resp:
+            async with session.post("https://cobalt.api.su/", json=payload, timeout=30) as resp:
                 return await resp.json()
     except Exception as e:
         return {"status": "error", "text": str(e)}
@@ -106,7 +106,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     result = await download_video(url)
     
-    if result.get("status") in ["redirect", "tunnel"]:
+    if result.get("status") in ["success"]:
         link = result.get("url")
         keyboard = [[InlineKeyboardButton("📥 Download Now", url=link)]]
         await msg.edit_text(
