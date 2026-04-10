@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: cobalt-telegram-bot
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: BOT_TOKEN
+        sync: false  # Manually set in Render dashboard
+      - key: COBALT_API_URL
+        value: https://api.cobalt.tools/api/json
+      - key: DATABASE_URL
+        fromDatabase:
+          name: cobalt-bot-db
+          property: connectionString
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: WEBHOOK_URL
+        sync: false  # Render ka URL yahan ayega
+
+databases:
+  - name: cobalt-bot-db
+    databaseName: cobalt_bot
+    user: cobalt_bot_user
