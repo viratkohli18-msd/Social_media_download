@@ -1,5 +1,6 @@
 import os
 import asyncio
+import yt_dlp
 import aiohttp
 import threading
 import time
@@ -9,16 +10,15 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # ========== CONFIG ==========
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
 PORT = int(os.getenv("PORT", 10000))
 ADMIN_IDS = [8217006573]  # 👈 YAHAN APNA TELEGRAM USER ID DALO
 
-# ========== WEB SERVER (Keep Render Awake) ==========
+# ========== WEB SERVER ==========
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return jsonify({"status": "🤖 Bot Running", "service": "Cobalt Downloader"})
+    return jsonify({"status": "🤖 Bot Running", "service": "Video Downloader"})
 
 @app.route('/health')
 def health():
@@ -37,27 +37,52 @@ def keep_alive():
         except:
             pass
 
-# ========== HELPERS ==========
-def detect_platform(url: str) -> str:
-    platforms = {
-        "youtube": ["youtube.com", "youtu.be"],
-        "tiktok": ["tiktok.com"],
-        "instagram": ["instagram.com"],
-        "twitter": ["twitter.com", "x.com"],
-        "facebook": ["facebook.com"],
-        "reddit": ["reddit.com"]
-    }
-    for name, domains in platforms.items():
-        if any(d in url.lower() for d in domains):
-            return name.title()
-    return "Unknown"
-
+# ========== VIDEO DOWNLOAD ==========
 async def download_video(url: str):
+    """yt-dlp se video download karo"""
     try:
-        async with aiohttp.ClientSession() as session:
-            payload = {"url": url, "vQuality": "1080", "isAudioOnly": False}
-            async with session.post("https://cobalt.api.su/", json=payload, timeout=30) as resp:
-                return await resp.json()
+        # Async run ke liye
+        loop = asyncio.get_event_loop()
+        
+        def extract():
+            ydl_opts = {
+                'format': 'best[filesize<50M]',  # 50MB limit (Telegram)
+                'quiet': True,
+                'no_warnings': True,
+                'extract_flat': False,
+            }
+            
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=False)
+                
+                # Direct URL nikalna
+                formats = info.get('formats', [])
+                
+                # Best format select karo (720p ya 1080p, <50MB)
+                best_format = None
+                for f in formats:
+                    if f.get('filesize') and f['filesize'] < 50*1024*1024:  # 50MB
+                        if f.get('height') in [720, 1080]:
+                            best_format = f
+                            break
+                
+                # Agar nahi mila toh first best le lo
+                if not best_format and formats:
+                    best_format = formats[0]
+                
+                return {
+                    "status": "success",
+                    "url": best_format.get('url') if best_format else None,
+                    "title": info.get('title', 'video'),
+                    "platform": info.get('extractor', 'unknown'),
+                    "duration": info.get('duration', 0),
+                    "thumbnail": info.get('thumbnail', '')
+                }
+        
+        # Run in thread (yt-dlp blocking hai)
+        result = await loop.run_in_executor(None, extract)
+        return result
+        
     except Exception as e:
         return {"status": "error", "text": str(e)}
 
@@ -68,54 +93,38 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🎬 *Hey {user.first_name}!*\n\n"
         f"Mujhe video link bhejo:\n"
         f"• YouTube • TikTok • Instagram\n"
-        f"• Twitter • Facebook • Reddit\n\n"
-        f"Example: `https://youtube.com/watch?v=...`",
+        f"• Twitter • Facebook • Reddit\n"
+        f"• SoundCloud • Vimeo • 1000+ sites\n\n"
+        f"⚡ *No watermark • HD Quality*",
         parse_mode="Markdown"
     )
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("📊 Stats feature coming soon!")
-
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        await update.message.reply_text("⛔ Admin only!")
-        return
-    await update.message.reply_text("🔐 Admin Panel\n\n/broadcast - Message all users")
-
-async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id not in ADMIN_IDS:
-        return
-    if not context.args:
-        await update.message.reply_text("Usage: /broadcast message")
-        return
-    await update.message.reply_text(f"📢 Broadcast: {' '.join(context.args)}")
-
-# ========== MESSAGE HANDLER ==========
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     
     if not url.startswith("http"):
         return
     
-    platform = detect_platform(url)
-    if platform == "Unknown":
-        await update.message.reply_text("❌ Unsupported link!")
-        return
+    # Processing
+    msg = await update.message.reply_text("⏳ Processing... Please wait!")
     
-    msg = await update.message.reply_text(f"⏳ Processing {platform}...")
-    
+    # Download
     result = await download_video(url)
     
-    if result.get("status") in ["success"]:
-        link = result.get("url")
-        keyboard = [[InlineKeyboardButton("📥 Download Now", url=link)]]
+    if result.get("status") == "success" and result.get("url"):
+        download_url = result["url"]
+        title = result.get("title", "video")
+        
+        keyboard = [[InlineKeyboardButton("📥 Download Now", url=download_url)]]
+        
         await msg.edit_text(
-            "✅ *Ready!*\n\nClick to download:",
+            f"✅ *{title[:50]}...*\n\n"
+            f"👇 Click to download:",
             reply_markup=InlineKeyboardMarkup(keyboard),
             parse_mode="Markdown"
         )
     else:
-        error = result.get("text", "Error")
+        error = result.get("text", "Download failed")
         await msg.edit_text(f"❌ Failed: {error}")
 
 # ========== MAIN ==========
@@ -128,16 +137,10 @@ def main():
     # Bot setup
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Commands
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("stats", stats))
-    application.add_handler(CommandHandler("admin", admin))
-    application.add_handler(CommandHandler("broadcast", broadcast))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("🤖 Bot is running...")
-    
-    # POLLING MODE (Simple & Working)
     application.run_polling()
 
 if __name__ == "__main__":
